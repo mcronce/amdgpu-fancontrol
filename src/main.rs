@@ -29,6 +29,9 @@ struct Config {
 
 	#[envconfig(from = "FILE_TEMP", default = "/sys/class/drm/card0/device/hwmon/hwmon?/temp1_input")]
 	file_temp: String,
+
+	#[envconfig(from = "HYSTERESIS", default = "6")]
+	hysteresis: u8,
 }
 
 struct State {
@@ -36,7 +39,9 @@ struct State {
 	fan_curve: fan_curve::FanCurve,
 	file_pwm: retry_file::RetryFile,
 	file_temp: retry_file::RetryFile,
-	file_fanmode: retry_file::RetryFile
+	file_fanmode: retry_file::RetryFile,
+	hysteresis: u32,
+	temp_at_last_change: u32
 }
 impl From<Config> for State {
 	fn from(config: Config) -> Self {
@@ -45,7 +50,9 @@ impl From<Config> for State {
 			fan_curve: config.fan_curve.into(),
 			file_pwm: retry_file::open_glob_or_panic(&config.file_pwm, 8, true, true),
 			file_temp: retry_file::open_glob_or_panic(&config.file_temp, 8, true, false),
-			file_fanmode: retry_file::open_glob_or_panic(&config.file_fanmode, 8, false, true)
+			file_fanmode: retry_file::open_glob_or_panic(&config.file_fanmode, 8, false, true),
+			hysteresis: (config.hysteresis as u32) * 1000,
+			temp_at_last_change: 0
 		}
 	}
 }
@@ -61,10 +68,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 		let target_pwm = state.fan_curve.get_target_pwm(temp);
 		print!("target PWM {}\n", target_pwm);
-		if(target_pwm != current_pwm) {
-			// TODO:  Hysteresis when temperature is decreasing
+		if(target_pwm > current_pwm || (temp < (state.temp_at_last_change - state.hysteresis))) {
 			state.file_fanmode.write("1")?;
 			state.file_pwm.write(&target_pwm.to_string())?;
+			state.temp_at_last_change = temp;
 		}
 		std::thread::sleep(state.sleep_interval);
 	}
